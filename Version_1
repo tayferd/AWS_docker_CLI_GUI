@@ -1,0 +1,141 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import subprocess
+import os
+
+# Function to auto-detect AWS keys and account ID files
+def find_aws_files():
+    current_dir = os.getcwd()
+    aws_key_file = os.path.join(current_dir, "aws_key.txt")
+    aws_secret_key_file = os.path.join(current_dir, "aws_secret_key.txt")
+    account_id_file = os.path.join(current_dir, "account_id.txt")
+
+    try:
+        with open(aws_key_file, 'r') as f:
+            access_key = f.readline().strip()
+        with open(aws_secret_key_file, 'r') as f:
+            secret_key = f.readline().strip()
+        with open(account_id_file, 'r') as f:
+            account_id = f.readline().strip()
+        return access_key, secret_key, account_id
+    except FileNotFoundError:
+        messagebox.showerror("Error", "Could not find AWS key files in the current directory.")
+        return None, None, None
+
+# Function to log in to AWS and build the Docker image
+def start_process():
+    global access_key, secret_key, aws_account_id
+    access_key, secret_key, aws_account_id = find_aws_files()
+    
+    if not (access_key and secret_key and aws_account_id):
+        return
+
+    # Set AWS credentials as environment variables
+    os.environ["AWS_ACCESS_KEY_ID"] = access_key
+    os.environ["AWS_SECRET_ACCESS_KEY"] = secret_key
+    os.environ["AWS_REGION"] = "us-east-1"
+
+    messagebox.showinfo("Started", "AWS credentials set. You can now build the Docker image.")
+
+# Function to build Docker image using Python file in the same directory
+def build_docker_image():
+    if not (access_key and secret_key and aws_account_id):
+        messagebox.showerror("Error", "Please click 'Start' to initialize AWS credentials first.")
+        return
+
+    try:
+        image_name = os.path.basename(os.getcwd())  # Auto-detect folder name as image name
+        dockerfile_path = os.path.join(os.getcwd(), 'Dockerfile')
+
+        if not os.path.exists(dockerfile_path):
+            messagebox.showerror("Error", "Dockerfile not found in the current directory.")
+            return
+
+        # Build Docker image
+        build_command = f"docker build -t {image_name} ."
+        subprocess.run(build_command, shell=True, check=True)
+
+        # Update the build status circle to green
+        canvas.itemconfig(build_status_circle, fill="green")
+        messagebox.showinfo("Success", f"Docker image '{image_name}' built successfully.")
+    except subprocess.CalledProcessError as e:
+        canvas.itemconfig(build_status_circle, fill="red")
+        messagebox.showerror("Error", f"Error building Docker image: {str(e)}")
+
+# Function to tag and push Docker image
+def tag_and_push_docker_image():
+    image_name = os.path.basename(os.getcwd())
+    try:
+        # Tag and push the Docker image
+        tag_command = f"docker tag {image_name}:latest {aws_account_id}.dkr.ecr.us-east-1.amazonaws.com/{image_name}:latest"
+        subprocess.run(tag_command, shell=True, check=True)
+
+        push_command = f"docker push {aws_account_id}.dkr.ecr.us-east-1.amazonaws.com/{image_name}:latest"
+        subprocess.run(push_command, shell=True, check=True)
+
+        messagebox.showinfo("Success", f"Docker image '{image_name}' pushed to ECR.")
+    except subprocess.CalledProcessError as e:
+        messagebox.showerror("Error", f"Error pushing Docker image: {str(e)}")
+
+# Function to create new AWS repository
+def create_new_repo():
+    repo_name = repo_name_entry.get().strip()
+    if not repo_name:
+        messagebox.showerror("Error", "Please enter a repository name.")
+        return
+
+    try:
+        create_repo_command = f"aws ecr create-repository --repository-name {repo_name}"
+        subprocess.run(create_repo_command, shell=True, check=True)
+        messagebox.showinfo("Success", f"Repository '{repo_name}' created successfully.")
+    except subprocess.CalledProcessError as e:
+        messagebox.showerror("Error", f"Error creating repository: {str(e)}")
+
+# Function to toggle the new repo input field
+def toggle_repo_field():
+    if create_repo_var.get():
+        repo_name_entry.grid(row=4, column=1, padx=10, pady=5)
+        add_repo_button.grid(row=5, column=1, padx=10, pady=5)
+    else:
+        repo_name_entry.grid_remove()
+        add_repo_button.grid_remove()
+
+# Tkinter UI Setup
+root = tk.Tk()
+root.title("AWS Docker Build and Push")
+
+# AWS and Docker settings on left
+left_frame = tk.Frame(root)
+left_frame.grid(row=0, column=0, padx=20, pady=20)
+
+# Start button to initialize AWS credentials
+start_button = tk.Button(left_frame, text="Start", command=start_process)
+start_button.grid(row=0, column=0, pady=10)
+
+# Checkbox to create new repo
+create_repo_var = tk.BooleanVar()
+create_repo_checkbox = tk.Checkbutton(left_frame, text="Create new repository", variable=create_repo_var, command=toggle_repo_field)
+create_repo_checkbox.grid(row=3, column=0, pady=10)
+
+# Entry field for new repo name
+repo_name_entry = tk.Entry(left_frame)
+add_repo_button = tk.Button(left_frame, text="Add Repo", command=create_new_repo)
+
+# Docker actions on right
+right_frame = tk.Frame(root)
+right_frame.grid(row=0, column=1, padx=20, pady=20)
+
+# Build Docker image button
+build_button = tk.Button(right_frame, text="Build Docker Image", command=build_docker_image)
+build_button.grid(row=0, column=0, pady=10)
+
+# Circle to indicate build status
+canvas = tk.Canvas(right_frame, width=50, height=50)
+build_status_circle = canvas.create_oval(10, 10, 40, 40, fill="red")
+canvas.grid(row=1, column=0, pady=10)
+
+# Tag and push button
+tag_push_button = tk.Button(right_frame, text="Tag and Push Docker Image", command=tag_and_push_docker_image)
+tag_push_button.grid(row=2, column=0, pady=10)
+
+root.mainloop()
